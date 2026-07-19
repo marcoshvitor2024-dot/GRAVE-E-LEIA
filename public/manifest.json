@@ -1,0 +1,19 @@
+{
+  "name": "Grave & Leia",
+  "short_name": "Grave & Leia",
+  "description": "Teleprompter profissional para gravar videos lendo o roteiro na tela, com geracao de roteiros virais por IA.",
+  "start_url": "/app",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0A0B0D",
+  "theme_color": "#0A0B0D",
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
