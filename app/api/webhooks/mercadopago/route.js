@@ -17,7 +17,7 @@ export async function POST(req) {
         `https://api.mercadopago.com/preapproval/${preapprovalId}`,
         {
           headers: {
-            Authorization: `Bearer ${process.env.MP_ACCESS_TOKEN}`,
+          Authorization: `Bearer ${process.env.MERCADOPAGO_ACCESS_TOKEN}`,`,
           },
         }
       );
