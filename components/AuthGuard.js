@@ -1,5 +1,4 @@
 "use client";
-
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -26,12 +25,13 @@ export default function AuthGuard({ children }) {
       const { data: prof } = await supabase
         .from("profiles")
         .select("*")
-        .eq("id", session.user.id)
+        .eq("user_id", session.user.id)
         .single();
 
       if (!mounted) return;
 
       setProfile(prof);
+
       if (prof && prof.subscription_status === "active") {
         setStatus("active");
       } else {
@@ -40,7 +40,6 @@ export default function AuthGuard({ children }) {
     };
 
     check();
-
     const { data: listener } = supabase.auth.onAuthStateChange(() => check());
     return () => {
       mounted = false;
