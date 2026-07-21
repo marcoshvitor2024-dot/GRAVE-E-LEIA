@@ -32,6 +32,7 @@ export default function Teleprompter({ scriptText, setScriptText, settings, setS
   const [downloadUrl, setDownloadUrl] = useState("");
   const [cameraError, setCameraError] = useState("");
   const [ready, setReady] = useState(false);
+  const [followDevice, setFollowDevice] = useState(true);
 
   const videoRef = useRef(null);
   const videoBackRef = useRef(null);
@@ -57,6 +58,37 @@ export default function Teleprompter({ scriptText, setScriptText, settings, setS
       r.current = null;
     });
   };
+
+  // ------- Segue a rotacao fisica do celular -------
+  useEffect(() => {
+    if (!followDevice) return;
+
+    const applyOrientation = () => {
+      const isPortrait =
+        typeof window !== "undefined" && window.matchMedia
+          ? window.matchMedia("(orientation: portrait)").matches
+          : true;
+      setSettings((s) => ({
+        ...s,
+        orientation: isPortrait ? "vertical" : "horizontal",
+      }));
+    };
+
+    applyOrientation();
+
+    const mql =
+      typeof window !== "undefined" && window.matchMedia
+        ? window.matchMedia("(orientation: portrait)")
+        : null;
+
+    mql?.addEventListener?.("change", applyOrientation);
+    window.addEventListener("resize", applyOrientation);
+
+    return () => {
+      mql?.removeEventListener?.("change", applyOrientation);
+      window.removeEventListener("resize", applyOrientation);
+    };
+  }, [followDevice, setSettings]);
 
   const initCamera = useCallback(async () => {
     setCameraError("");
@@ -115,14 +147,13 @@ export default function Teleprompter({ scriptText, setScriptText, settings, setS
 
       if (playing) clockRef.current += dt;
 
-      // rolagem do overlay HTML do teleprompter (manipulacao direta do DOM p/ performance)
+      // rolagem do texto do teleprompter (sempre vertical, de cima pra baixo,
+      // independente da orientacao do video, ja que agora o texto fica numa
+      // area propria e nao mais sobreposto ao video)
       if (promptRef.current) {
         const pxPerSecond = 18 + settings.speed * 14;
         const offset = clockRef.current * pxPerSecond;
-        promptRef.current.style.transform =
-          settings.orientation === "vertical"
-            ? `translateY(-${offset}px)`
-            : `translateX(-${offset}px)`;
+        promptRef.current.style.transform = `translateY(-${offset}px)`;
       }
 
       // desenho do canvas (modo apresentacao e/ou texto animado)
@@ -291,9 +322,9 @@ export default function Teleprompter({ scriptText, setScriptText, settings, setS
     setPlaying(false);
   };
 
-  const aspect = settings.orientation === "vertical" ? "9 / 16" : "16 / 9";
-  const canvasSize =
-    settings.orientation === "vertical" ? { w: 720, h: 1280 } : { w: 1280, h: 720 };
+  const isVertical = settings.orientation === "vertical";
+  const mediaAspect = isVertical ? "9 / 16" : "16 / 9";
+  const canvasSize = isVertical ? { w: 720, h: 1280 } : { w: 1280, h: 720 };
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 320px", gap: 20 }} className="studio-grid">
@@ -306,82 +337,113 @@ export default function Teleprompter({ scriptText, setScriptText, settings, setS
             padding: 0,
             overflow: "hidden",
             position: "relative",
-            aspectRatio: aspect,
+            display: "flex",
+            flexDirection: isVertical ? "column" : "row",
             maxHeight: "72vh",
+            maxWidth: isVertical ? 420 : "100%",
             margin: "0 auto",
             background: "#000",
           }}
         >
-          {needsCanvas ? (
-            <canvas ref={canvasRef} width={canvasSize.w} height={canvasSize.h} style={{ width: "100%", height: "100%", display: "block" }} />
-          ) : (
-            <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
-          )}
-
-          {/* elementos ocultos usados como fonte para o canvas no modo apresentacao */}
-          {settings.presentation && (
-            <div style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", opacity: 0 }}>
-              <video ref={videoBackRef} autoPlay playsInline muted />
-              <video ref={videoFrontRef} autoPlay playsInline muted />
-            </div>
-          )}
-
-          {/* overlay do teleprompter (guia de leitura, nao gravado) */}
+          {/* AREA DO TEXTO (teleprompter) — sempre em area propria, nunca sobreposta */}
           {!editing && (
             <div
               style={{
-                position: "absolute",
-                inset: 0,
-                display: "flex",
-                alignItems: settings.orientation === "vertical" ? "flex-start" : "center",
-                justifyContent: settings.orientation === "vertical" ? "center" : "flex-start",
+                flex: isVertical ? "0 0 30%" : "0 0 32%",
+                minHeight: isVertical ? 140 : "auto",
+                minWidth: isVertical ? "auto" : 220,
+                background: "linear-gradient(180deg, #14161A 0%, #0A0B0D 100%)",
+                borderBottom: isVertical ? "1px solid var(--line)" : "none",
+                borderRight: isVertical ? "none" : "1px solid var(--line)",
                 overflow: "hidden",
-                pointerEvents: "none",
-                background:
-                  settings.orientation === "vertical"
-                    ? "linear-gradient(to bottom, rgba(0,0,0,0.75) 0%, rgba(0,0,0,0.45) 55%, transparent 100%)"
-                    : "linear-gradient(to right, rgba(0,0,0,0.75) 0%, rgba(0,0,0,0.45) 55%, transparent 100%)",
+                position: "relative",
+                display: "flex",
+                alignItems: "flex-start",
+                justifyContent: "center",
               }}
             >
               <div
-                ref={promptRef}
                 style={{
-                  padding: settings.orientation === "vertical" ? "24px 20px 0" : "0 24px",
-                  whiteSpace: settings.orientation === "vertical" ? "normal" : "nowrap",
-                  color: "#fff",
-                  fontSize: settings.fontSize,
-                  lineHeight: 1.4,
-                  fontWeight: 600,
-                  textShadow: "0 2px 10px rgba(0,0,0,0.6)",
-                  maxWidth: settings.orientation === "vertical" ? "100%" : "none",
+                  position: "absolute",
+                  inset: 0,
+                  overflow: "hidden",
                 }}
               >
-                {scriptText || DEFAULT_SCRIPT}
+                <div
+                  ref={promptRef}
+                  style={{
+                    padding: "20px 18px",
+                    color: "#fff",
+                    fontSize: settings.fontSize,
+                    lineHeight: 1.4,
+                    fontWeight: 600,
+                    textShadow: "0 2px 10px rgba(0,0,0,0.6)",
+                  }}
+                >
+                  {scriptText || DEFAULT_SCRIPT}
+                </div>
               </div>
-            </div>
-          )}
-
-          {editing && (
-            <div style={{ position: "absolute", inset: 0, background: "rgba(10,11,13,0.92)", padding: 20 }}>
-              <textarea
-                className="input"
-                style={{ height: "100%", resize: "none", fontSize: 16, lineHeight: 1.5 }}
-                value={scriptText}
-                onChange={(e) => setScriptText(e.target.value)}
-                placeholder="Escreva o seu roteiro aqui..."
-                autoFocus
+              {/* sombra indicando continuidade da rolagem */}
+              <div
+                style={{
+                  position: "absolute",
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  height: 40,
+                  background: "linear-gradient(to top, rgba(0,0,0,0.75), transparent)",
+                  pointerEvents: "none",
+                }}
               />
             </div>
           )}
 
-          {isRecording && (
-            <div style={{ position: "absolute", top: 16, left: 16, display: "flex", alignItems: "center", gap: 8, background: "rgba(0,0,0,0.55)", padding: "6px 12px", borderRadius: 999 }}>
-              <span style={{ width: 10, height: 10, borderRadius: "50%", background: "var(--rec)", animation: isPaused ? "none" : "pulse 1s infinite" }} />
-              <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "#fff" }}>
-                {isPaused ? "PAUSADO" : "GRAVANDO"}
-              </span>
-            </div>
-          )}
+          {/* AREA DA CAMERA / GRAVACAO */}
+          <div
+            style={{
+              flex: 1,
+              position: "relative",
+              aspectRatio: editing ? "auto" : mediaAspect,
+              minHeight: 0,
+              background: "#000",
+            }}
+          >
+            {needsCanvas ? (
+              <canvas ref={canvasRef} width={canvasSize.w} height={canvasSize.h} style={{ width: "100%", height: "100%", display: "block" }} />
+            ) : (
+              <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+            )}
+
+            {/* elementos ocultos usados como fonte para o canvas no modo apresentacao */}
+            {settings.presentation && (
+              <div style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", opacity: 0 }}>
+                <video ref={videoBackRef} autoPlay playsInline muted />
+                <video ref={videoFrontRef} autoPlay playsInline muted />
+              </div>
+            )}
+
+            {editing && (
+              <div style={{ position: "absolute", inset: 0, background: "rgba(10,11,13,0.92)", padding: 20 }}>
+                <textarea
+                  className="input"
+                  style={{ height: "100%", resize: "none", fontSize: 16, lineHeight: 1.5 }}
+                  value={scriptText}
+                  onChange={(e) => setScriptText(e.target.value)}
+                  placeholder="Escreva o seu roteiro aqui..."
+                  autoFocus
+                />
+              </div>
+            )}
+
+            {isRecording && (
+              <div style={{ position: "absolute", top: 16, left: 16, display: "flex", alignItems: "center", gap: 8, background: "rgba(0,0,0,0.55)", padding: "6px 12px", borderRadius: 999 }}>
+                <span style={{ width: 10, height: 10, borderRadius: "50%", background: "var(--rec)", animation: isPaused ? "none" : "pulse 1s infinite" }} />
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "#fff" }}>
+                  {isPaused ? "PAUSADO" : "GRAVANDO"}
+                </span>
+              </div>
+            )}
+          </div>
         </div>
 
         {cameraError && (
@@ -436,12 +498,25 @@ export default function Teleprompter({ scriptText, setScriptText, settings, setS
         <span className="eyebrow">Aba de gravacao</span>
         <h3 style={{ margin: "10px 0 18px" }}>Configuracoes</h3>
 
+        <div className="card" style={{ background: "var(--panel-2)", marginBottom: 18, padding: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <strong style={{ fontSize: 14 }}>Girar com o celular</strong>
+              <p style={{ fontSize: 12, color: "var(--muted)", margin: "4px 0 0" }}>
+                A orientacao muda automaticamente ao rotacionar o aparelho
+              </p>
+            </div>
+            <Switch checked={followDevice} onChange={setFollowDevice} />
+          </div>
+        </div>
+
         <div style={{ marginBottom: 18 }}>
-          <label>Orientacao</label>
+          <label>Orientacao{followDevice ? " (automatica)" : ""}</label>
           <div style={{ display: "flex", gap: 8 }}>
             <button
               className={settings.orientation === "vertical" ? "btn btn-primary" : "btn btn-secondary"}
               style={{ flex: 1, padding: "10px" }}
+              disabled={followDevice}
               onClick={() => setSettings((s) => ({ ...s, orientation: "vertical" }))}
             >
               Vertical
@@ -449,6 +524,7 @@ export default function Teleprompter({ scriptText, setScriptText, settings, setS
             <button
               className={settings.orientation === "horizontal" ? "btn btn-primary" : "btn btn-secondary"}
               style={{ flex: 1, padding: "10px" }}
+              disabled={followDevice}
               onClick={() => setSettings((s) => ({ ...s, orientation: "horizontal" }))}
             >
               Horizontal
