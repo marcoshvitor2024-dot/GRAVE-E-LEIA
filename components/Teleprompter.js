@@ -24,6 +24,12 @@ function wrapCanvasText(ctx, text, maxWidth) {
   return lines;
 }
 
+function formatTime(totalSeconds) {
+  const s = Math.floor(totalSeconds % 60);
+  const m = Math.floor(totalSeconds / 60);
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
 export default function Teleprompter({ scriptText, setScriptText, settings, setSettings }) {
   const [editing, setEditing] = useState(false);
   const [playing, setPlaying] = useState(false);
@@ -33,10 +39,20 @@ export default function Teleprompter({ scriptText, setScriptText, settings, setS
   const [cameraError, setCameraError] = useState("");
   const [ready, setReady] = useState(false);
   const [followDevice, setFollowDevice] = useState(true);
+  const [showPrompter, setShowPrompter] = useState(true);
+  const [elapsed, setElapsed] = useState(0);
+
+  // fundo (video ou imagem) usado durante a gravacao
+  const [backgroundMode, setBackgroundMode] = useState("none"); // none | video | image
+  const [backgroundUrl, setBackgroundUrl] = useState("");
+  const [backgroundMuted, setBackgroundMuted] = useState(true);
+  const [backgroundVolume, setBackgroundVolume] = useState(80);
 
   const videoRef = useRef(null);
   const videoBackRef = useRef(null);
   const videoFrontRef = useRef(null);
+  const bgVideoRef = useRef(null);
+  const bgImageRef = useRef(null);
   const canvasRef = useRef(null);
   const promptRef = useRef(null);
   const stageRef = useRef(null);
@@ -49,8 +65,11 @@ export default function Teleprompter({ scriptText, setScriptText, settings, setS
   const rafRef = useRef(null);
   const clockRef = useRef(0);
   const lastTsRef = useRef(0);
+  const recordStartRef = useRef(0);
+  const timerIntervalRef = useRef(null);
 
-  const needsCanvas = settings.presentation || settings.animatedText;
+  const hasBackground = backgroundMode !== "none" && backgroundUrl;
+  const needsCanvas = settings.presentation || settings.animatedText || hasBackground;
 
   const stopAllTracks = () => {
     [streamRef, backStreamRef, frontStreamRef].forEach((r) => {
@@ -90,11 +109,13 @@ export default function Teleprompter({ scriptText, setScriptText, settings, setS
     };
   }, [followDevice, setSettings]);
 
+  // ------- Camera(s) -------
   const initCamera = useCallback(async () => {
     setCameraError("");
     stopAllTracks();
     try {
       if (settings.presentation) {
+        // Traseira = fundo (tela toda) | Frontal = quadrado pequeno
         const back = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: { ideal: "environment" } },
           audio: false,
@@ -134,7 +155,53 @@ export default function Teleprompter({ scriptText, setScriptText, settings, setS
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initCamera]);
 
-  // Loop principal: rolagem do texto + desenho do canvas (quando necessario)
+  // ------- Upload de fundo (video ou imagem) -------
+  const handleBackgroundUpload = (file) => {
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    setBackgroundUrl(url);
+    if (file.type.startsWith("video/")) {
+      setBackgroundMode("video");
+    } else if (file.type.startsWith("image/")) {
+      setBackgroundMode("image");
+    }
+  };
+
+  const clearBackground = () => {
+    setBackgroundMode("none");
+    setBackgroundUrl("");
+  };
+
+  // aplica mudo/volume no elemento de video de fundo
+  useEffect(() => {
+    if (bgVideoRef.current) {
+      bgVideoRef.current.muted = backgroundMuted;
+      bgVideoRef.current.volume = backgroundVolume / 100;
+    }
+  }, [backgroundMuted, backgroundVolume, backgroundUrl]);
+
+  // toca/pausa o video de fundo junto com o "Testar leitura" / gravacao
+  useEffect(() => {
+    const v = bgVideoRef.current;
+    if (!v || backgroundMode !== "video") return;
+    if (playing) {
+      v.play().catch(() => {});
+    } else {
+      v.pause();
+    }
+  }, [playing, backgroundMode]);
+
+  // ------- Timer de gravacao -------
+  useEffect(() => {
+    if (isRecording && !isPaused) {
+      timerIntervalRef.current = setInterval(() => {
+        setElapsed(Math.floor((Date.now() - recordStartRef.current) / 1000));
+      }, 500);
+    }
+    return () => clearInterval(timerIntervalRef.current);
+  }, [isRecording, isPaused]);
+
+  // ------- Loop principal: rolagem do texto + desenho do canvas -------
   useEffect(() => {
     const words = scriptText.trim().length ? scriptText.trim().split(/\s+/) : [];
     const canvas = canvasRef.current;
@@ -147,32 +214,30 @@ export default function Teleprompter({ scriptText, setScriptText, settings, setS
 
       if (playing) clockRef.current += dt;
 
-      // rolagem do texto do teleprompter (sempre vertical, de cima pra baixo,
-      // independente da orientacao do video, ja que agora o texto fica numa
-      // area propria e nao mais sobreposto ao video)
       if (promptRef.current) {
         const pxPerSecond = 18 + settings.speed * 14;
         const offset = clockRef.current * pxPerSecond;
         promptRef.current.style.transform = `translateY(-${offset}px)`;
       }
 
-      // desenho do canvas (modo apresentacao e/ou texto animado)
       if (needsCanvas && ctx && canvas) {
         const W = canvas.width;
         const H = canvas.height;
         ctx.fillStyle = "#000";
         ctx.fillRect(0, 0, W, H);
 
-        const drawCover = (video, dx, dy, dw, dh, radius = 0) => {
-          if (!video || video.readyState < 2) return;
-          const vw = video.videoWidth;
-          const vh = video.videoHeight;
-          if (!vw || !vh) return;
-          const scale = Math.max(dw / vw, dh / vh);
+        const drawCover = (media, dx, dy, dw, dh, radius = 0) => {
+          if (!media) return;
+          const isVideoEl = media.tagName === "VIDEO";
+          if (isVideoEl && media.readyState < 2) return;
+          const mw = isVideoEl ? media.videoWidth : media.naturalWidth;
+          const mh = isVideoEl ? media.videoHeight : media.naturalHeight;
+          if (!mw || !mh) return;
+          const scale = Math.max(dw / mw, dh / mh);
           const sw = dw / scale;
           const sh = dh / scale;
-          const sx = (vw - sw) / 2;
-          const sy = (vh - sh) / 2;
+          const sx = (mw - sw) / 2;
+          const sy = (mh - sh) / 2;
           ctx.save();
           if (radius) {
             ctx.beginPath();
@@ -184,11 +249,12 @@ export default function Teleprompter({ scriptText, setScriptText, settings, setS
             ctx.closePath();
             ctx.clip();
           }
-          ctx.drawImage(video, sx, sy, sw, sh, dx, dy, dw, dh);
+          ctx.drawImage(media, sx, sy, sw, sh, dx, dy, dw, dh);
           ctx.restore();
         };
 
         if (settings.presentation) {
+          // fundo = camera traseira / quadrado pequeno = camera frontal
           drawCover(videoBackRef.current, 0, 0, W, H);
           const pipW = W * 0.32;
           const pipH = pipW * (16 / 9);
@@ -198,6 +264,20 @@ export default function Teleprompter({ scriptText, setScriptText, settings, setS
           ctx.lineWidth = 4;
           drawCover(videoFrontRef.current, W - pipW - margin, margin, pipW, pipH, 16);
           ctx.strokeRect(W - pipW - margin, margin, pipW, pipH);
+          ctx.restore();
+        } else if (hasBackground) {
+          // fundo = video/imagem enviada / quadrado pequeno = sua camera
+          const bgEl = backgroundMode === "video" ? bgVideoRef.current : bgImageRef.current;
+          drawCover(bgEl, 0, 0, W, H);
+
+          const pipW = W * 0.34;
+          const pipH = pipW * (16 / 9);
+          const margin = 24;
+          ctx.save();
+          ctx.strokeStyle = "#3DDC97";
+          ctx.lineWidth = 4;
+          drawCover(videoRef.current, W - pipW - margin, H - pipH - margin, pipW, pipH, 16);
+          ctx.strokeRect(W - pipW - margin, H - pipH - margin, pipW, pipH);
           ctx.restore();
         } else {
           drawCover(videoRef.current, 0, 0, W, H);
@@ -248,7 +328,7 @@ export default function Teleprompter({ scriptText, setScriptText, settings, setS
 
     rafRef.current = requestAnimationFrame(step);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [playing, settings, scriptText, needsCanvas]);
+  }, [playing, settings, scriptText, needsCanvas, hasBackground, backgroundMode]);
 
   const resetScroll = () => {
     clockRef.current = 0;
@@ -296,6 +376,8 @@ export default function Teleprompter({ scriptText, setScriptText, settings, setS
     };
     recorder.start(250);
     recorderRef.current = recorder;
+    recordStartRef.current = Date.now();
+    setElapsed(0);
     setIsRecording(true);
     setIsPaused(false);
     setPlaying(true);
@@ -308,6 +390,7 @@ export default function Teleprompter({ scriptText, setScriptText, settings, setS
       recorder.resume();
       setIsPaused(false);
       setPlaying(true);
+      recordStartRef.current = Date.now() - elapsed * 1000;
     } else {
       recorder.pause();
       setIsPaused(true);
@@ -345,8 +428,8 @@ export default function Teleprompter({ scriptText, setScriptText, settings, setS
             background: "#000",
           }}
         >
-          {/* AREA DO TEXTO (teleprompter) — sempre em area propria, nunca sobreposta */}
-          {!editing && (
+          {/* AREA DO TEXTO (teleprompter) */}
+          {!editing && showPrompter && (
             <div
               style={{
                 flex: isVertical ? "0 0 30%" : "0 0 32%",
@@ -362,13 +445,7 @@ export default function Teleprompter({ scriptText, setScriptText, settings, setS
                 justifyContent: "center",
               }}
             >
-              <div
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  overflow: "hidden",
-                }}
-              >
+              <div style={{ position: "absolute", inset: 0, overflow: "hidden" }}>
                 <div
                   ref={promptRef}
                   style={{
@@ -383,7 +460,6 @@ export default function Teleprompter({ scriptText, setScriptText, settings, setS
                   {scriptText || DEFAULT_SCRIPT}
                 </div>
               </div>
-              {/* sombra indicando continuidade da rolagem */}
               <div
                 style={{
                   position: "absolute",
@@ -408,10 +484,34 @@ export default function Teleprompter({ scriptText, setScriptText, settings, setS
               background: "#000",
             }}
           >
+            {!ready && !cameraError && (
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  color: "var(--muted)",
+                  fontSize: 14,
+                  zIndex: 2,
+                }}
+              >
+                Carregando camera...
+              </div>
+            )}
+
             {needsCanvas ? (
               <canvas ref={canvasRef} width={canvasSize.w} height={canvasSize.h} style={{ width: "100%", height: "100%", display: "block" }} />
             ) : (
               <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+            )}
+
+            {/* fonte oculta da camera quando ela e usada so como PIP sobre um fundo */}
+            {!settings.presentation && hasBackground && (
+              <div style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", opacity: 0 }}>
+                <video ref={videoRef} autoPlay playsInline muted />
+              </div>
             )}
 
             {/* elementos ocultos usados como fonte para o canvas no modo apresentacao */}
@@ -419,6 +519,17 @@ export default function Teleprompter({ scriptText, setScriptText, settings, setS
               <div style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", opacity: 0 }}>
                 <video ref={videoBackRef} autoPlay playsInline muted />
                 <video ref={videoFrontRef} autoPlay playsInline muted />
+              </div>
+            )}
+
+            {/* fonte oculta do fundo (video ou imagem enviados) */}
+            {hasBackground && (
+              <div style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", opacity: 0 }}>
+                {backgroundMode === "video" ? (
+                  <video ref={bgVideoRef} src={backgroundUrl} loop playsInline />
+                ) : (
+                  <img ref={bgImageRef} src={backgroundUrl} alt="" />
+                )}
               </div>
             )}
 
@@ -439,7 +550,7 @@ export default function Teleprompter({ scriptText, setScriptText, settings, setS
               <div style={{ position: "absolute", top: 16, left: 16, display: "flex", alignItems: "center", gap: 8, background: "rgba(0,0,0,0.55)", padding: "6px 12px", borderRadius: 999 }}>
                 <span style={{ width: 10, height: 10, borderRadius: "50%", background: "var(--rec)", animation: isPaused ? "none" : "pulse 1s infinite" }} />
                 <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "#fff" }}>
-                  {isPaused ? "PAUSADO" : "GRAVANDO"}
+                  {isPaused ? "PAUSADO" : "GRAVANDO"} · {formatTime(elapsed)}
                 </span>
               </div>
             )}
@@ -454,6 +565,10 @@ export default function Teleprompter({ scriptText, setScriptText, settings, setS
         <div style={{ display: "flex", gap: 10, justifyContent: "center", alignItems: "center", marginTop: 18, flexWrap: "wrap" }}>
           <button className="btn btn-secondary" onClick={() => setEditing((v) => !v)}>
             {editing ? "Ver teleprompter" : "Editar texto"}
+          </button>
+
+          <button className="btn btn-secondary" onClick={() => setShowPrompter((v) => !v)}>
+            {showPrompter ? "🙈 Ocultar teleprompter" : "👁 Ativar teleprompter"}
           </button>
 
           {!isRecording && (
@@ -558,10 +673,73 @@ export default function Teleprompter({ scriptText, setScriptText, settings, setS
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div>
               <strong style={{ fontSize: 14 }}>Modo apresentacao</strong>
-              <p style={{ fontSize: 12, color: "var(--muted)", margin: "4px 0 0" }}>Grava com as duas cameras ao mesmo tempo</p>
+              <p style={{ fontSize: 12, color: "var(--muted)", margin: "4px 0 0" }}>
+                Traseira no fundo + frontal no quadrado pequeno
+              </p>
             </div>
-            <Switch checked={settings.presentation} onChange={(v) => setSettings((s) => ({ ...s, presentation: v }))} />
+            <Switch
+              checked={settings.presentation}
+              onChange={(v) => {
+                setSettings((s) => ({ ...s, presentation: v }));
+                if (v) clearBackground();
+              }}
+            />
           </div>
+        </div>
+
+        {/* FUNDO COM VIDEO OU IMAGEM */}
+        <div className="card" style={{ background: "var(--panel-2)", marginBottom: 18, padding: 16 }}>
+          <strong style={{ fontSize: 14 }}>Fundo com video ou imagem</strong>
+          <p style={{ fontSize: 12, color: "var(--muted)", margin: "4px 0 12px" }}>
+            Sua camera aparece em um quadrado pequeno sobre o fundo escolhido
+          </p>
+
+          {!hasBackground ? (
+            <label className="btn btn-secondary btn-block" style={{ cursor: "pointer", textAlign: "center" }}>
+              + Escolher video ou imagem
+              <input
+                type="file"
+                accept="video/*,image/*"
+                style={{ display: "none" }}
+                disabled={settings.presentation}
+                onChange={(e) => {
+                  handleBackgroundUpload(e.target.files?.[0]);
+                  setSettings((s) => ({ ...s, presentation: false }));
+                }}
+              />
+            </label>
+          ) : (
+            <>
+              <button className="btn btn-ghost btn-block" onClick={clearBackground} style={{ marginBottom: 12 }}>
+                ✕ Remover fundo
+              </button>
+
+              {backgroundMode === "video" && (
+                <>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                    <span style={{ fontSize: 13 }}>Video de fundo mudo</span>
+                    <Switch checked={backgroundMuted} onChange={setBackgroundMuted} />
+                  </div>
+                  {!backgroundMuted && (
+                    <div>
+                      <label style={{ fontSize: 13 }}>Volume do video de fundo: {backgroundVolume}%</label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        value={backgroundVolume}
+                        onChange={(e) => setBackgroundVolume(Number(e.target.value))}
+                        style={{ width: "100%" }}
+                      />
+                    </div>
+                  )}
+                  <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>
+                    O audio do video de fundo e so para voce ouvir durante a gravacao — o video final grava o audio do seu microfone.
+                  </p>
+                </>
+              )}
+            </>
+          )}
         </div>
 
         <div style={{ marginBottom: 18 }}>
