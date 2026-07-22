@@ -1,10 +1,8 @@
 "use client";
-
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import AuthGuard from "@/components/AuthGuard";
 import Teleprompter from "@/components/Teleprompter";
-import ScriptGenerator from "@/components/ScriptGenerator";
 import { supabase } from "@/lib/supabaseClient";
 
 const DEFAULT_SCRIPT =
@@ -14,7 +12,6 @@ const DEFAULT_SCRIPT =
 
 export default function AppPage() {
   const router = useRouter();
-  const [tab, setTab] = useState("gravar");
   const [scriptText, setScriptText] = useState(DEFAULT_SCRIPT);
   const [settings, setSettings] = useState({
     orientation: "vertical",
@@ -39,41 +36,17 @@ export default function AppPage() {
               Grave <span style={{ color: "var(--rec)" }}>&</span> Leia
             </strong>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <button
-                className={tab === "gravar" ? "btn btn-primary" : "btn btn-ghost"}
-                onClick={() => setTab("gravar")}
-              >
-                Gravar
-              </button>
-              <button
-                className={tab === "roteiro" ? "btn btn-primary" : "btn btn-ghost"}
-                onClick={() => setTab("roteiro")}
-              >
-                Roteiro IA
-              </button>
               <button className="btn btn-ghost" onClick={handleLogout}>Sair</button>
             </div>
           </div>
         </div>
-
         <div className="container" style={{ padding: "28px 24px 60px" }}>
-          {tab === "gravar" ? (
-            <Teleprompter
-              scriptText={scriptText}
-              setScriptText={setScriptText}
-              settings={settings}
-              setSettings={setSettings}
-            />
-          ) : (
-            <div style={{ maxWidth: 640, margin: "0 auto" }}>
-              <ScriptGenerator
-                onUseScript={(texto) => {
-                  setScriptText(texto);
-                  setTab("gravar");
-                }}
-              />
-            </div>
-          )}
+          <Teleprompter
+            scriptText={scriptText}
+            setScriptText={setScriptText}
+            settings={settings}
+            setSettings={setSettings}
+          />
         </div>
       </main>
     </AuthGuard>
